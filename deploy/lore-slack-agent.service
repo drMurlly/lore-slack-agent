@@ -1,0 +1,22 @@
+# Lore — Slack deep-research agent, as a systemd **user** service.
+# With `loginctl enable-linger <user>` it starts on boot and survives reboots.
+# Secrets live in the EnvironmentFile (see lore.env.example) — never in this unit.
+# Install + management: see deploy/README.md.  (%h = the user's home directory.)
+[Unit]
+Description=Lore — Slack deep-research agent (Socket Mode)
+Documentation=https://github.com/drMurlly/lore-slack-agent
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/slack-mcp-agent/repo
+EnvironmentFile=%h/projects/slack-mcp-agent/lore.env
+ExecStart=%h/projects/slack-mcp-agent/repo/.venv/bin/python -m conduit.slack_app
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/projects/slack-mcp-agent/lore-app.log
+StandardError=append:%h/projects/slack-mcp-agent/lore-app.log
+
+[Install]
+WantedBy=default.target
