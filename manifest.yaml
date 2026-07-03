@@ -1,0 +1,72 @@
+# Slack app manifest for Lore — import at https://api.slack.com/apps (Create New App → From a manifest).
+# This is the live manifest for the "Simon" sandbox app (app_id A0BENDBHSEP).
+display_information:
+  name: Lore
+  description: Deep-research agent for your team's Slack memory
+  long_description: >-
+    Ask a hard question; Lore decomposes it, runs a multi-hop search across your
+    channels, threads and files, builds a knowledge graph of decisions, resolves
+    contradictions and timeline drift, and answers with inline citations that
+    deep-link to the exact source messages - delivered as a Canvas report with a
+    live streaming research trace.
+
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Lore
+    always_online: true
+  assistant_view:
+    assistant_description: Deep research over your team's Slack memory - cited answers from your own history.
+    suggested_prompts:
+      - title: "I'm new here — what's the story behind our pricing?"
+        message: "What did we decide about pricing, and did anything change since?"
+      - title: "Summarise recent decisions"
+        message: "What decisions did we make in the last two weeks?"
+      - title: "How does the deployment pipeline work?"
+        message: "How does the deployment pipeline work?"
+  slash_commands:
+    - command: /lore
+      description: Deep-research a question across your Slack
+      usage_hint: "[question]"
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - assistant:write
+      - chat:write
+      - chat:write.public
+      - chat:write.customize
+      - commands
+      - channels:history
+      - channels:read
+      - channels:join
+      - channels:manage
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - im:write
+      - mpim:history
+      - mpim:read
+      - users:read
+      - canvases:write
+      - canvases:read
+
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.im
+      - assistant_thread_started
+      - assistant_thread_context_changed
+      - app_home_opened
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

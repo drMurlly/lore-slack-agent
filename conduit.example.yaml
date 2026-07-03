@@ -1,0 +1,10 @@
+# Lore example config
+# The local model used for decomposition + synthesis (any Ollama OpenAI-compatible model).
+model: llama3.2
+ollama_api_base: "http://localhost:11434/v1"
+
+# Optional MCP servers whose tools the research loop can consult (e.g. an org glossary).
+servers:
+  - name: glossary
+    command: python
+    args: ["servers/glossary_server.py"]

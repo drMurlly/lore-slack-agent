@@ -1,0 +1,33 @@
+%% Lore — architecture. Render to PNG for Devpost:
+%%   npx -y @mermaid-js/mermaid-cli -i docs/architecture.mmd -o docs/architecture.png
+flowchart TB
+    subgraph Slack["Slack workspace"]
+        U([User]) -->|/lore · @Lore · Assistant thread| SURF
+        SURF["Slack surface — Bolt (Socket Mode)<br/>slack_app.py"]
+        SURF -->|streaming trace · suggested prompts| ASSIST["Assistant split-view<br/>assistant_surface.py + blocks.py"]
+        SURF -->|app_home_opened| HOME["Lore App Home"]
+    end
+
+    SURF --> RUN
+
+    subgraph Engine["Lore research engine (Python)"]
+        RUN["research.run()"]
+        RUN --> DEC["Decompose question → sub-queries"]
+        DEC --> MCP["MCP glossary consult<br/>mcp_manager.py ↔ servers/glossary_server.py"]
+        MCP --> HOP["Multi-hop retrieval + follow-up hop"]
+        HOP --> KG["Knowledge graph<br/>entities + decided/changed/supersedes<br/>knowledge_graph.py"]
+        KG --> SYN["Cited synthesis + deterministic<br/>timeline-drift resolution<br/>citations.py + contradiction.py"]
+    end
+
+    HOP -->|search seam| RTS
+    subgraph Retrieval["Retrieval substrate (interchangeable)"]
+        RTS["RTSClient (RTS API)<br/>rts_client.py"]
+        LIVE["SlackHistoryRTS<br/>conversations.history<br/>live_rts.py"]
+        FAKE["FakeRTS (tests/demo)<br/>fake_rts.py"]
+    end
+
+    MCP -.real MCP JSON-RPC over stdio.-> GLOSS[("Org glossary<br/>MCP server")]
+    SYN --> CANVAS["Canvas report<br/>Decision timeline + cited answer<br/>canvas.py"]
+    CANVAS -->|canvases.create · access.set| Slack
+    SYN -->|local model<br/>Ollama, OpenAI-compatible| LLM[("qwen3.5 / any Ollama model")]
+    CANVAS --> ASSIST
