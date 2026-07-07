@@ -176,6 +176,8 @@ HOME_EXAMPLES: list[dict[str, str]] = [
      "q": "What is our API rate limit, and which region hosts the primary database?"},
     {"label": "🔐 SSO policy",
      "q": "What is our SSO policy for free-tier users?"},
+    {"label": "🎨 Design system changes",
+     "q": "What is the base spacing unit in our design system, and did it change?"},
 ]
 
 
@@ -224,7 +226,7 @@ def build_lore_home_view(stats: Optional[dict[str, Any]] = None) -> dict[str, An
                                "assistant ▸, `@Lore` in a channel, or type `/lore <question>`."}]},
         {"type": "divider"},
         {"type": "section", "text": {"type": "mrkdwn", "text": "*Try asking:*"}},
-        {"type": "actions", "elements": [_btn(i) for i in range(2, 5)]},
+        {"type": "actions", "elements": [_btn(i) for i in range(2, 6)]},
         {"type": "divider"},
         {"type": "section",
          "text": {"type": "mrkdwn",

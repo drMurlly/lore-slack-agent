@@ -24,11 +24,14 @@ DEFAULT_SUGGESTED_PROMPTS: list[dict[str, str]] = [
     {"title": "I'm new here — what's the story behind our pricing?",
      "message": "What did we decide about pricing, and did anything change since?"},
     {"title": "Summarise recent decisions",
-     "message": "What decisions did we make in the last two weeks?"},
+     "message": "What decisions did we make recently, and what changed?"},
     {"title": "How does the deployment pipeline work?",
      "message": "How does the deployment pipeline work?"},
-    {"title": "Have we changed our policy on API versioning?",
-     "message": "Have we changed our policy on API versioning?"},
+    # 4th prompt: showcases the deterministic reversal resolver on a non-pricing topic (the design
+    # system's base spacing unit changed 8px -> 4px). Every prompt here is backed by real seeded
+    # history so clicking it always returns a cited answer, never an empty state.
+    {"title": "What changed in our design system?",
+     "message": "What is the base spacing unit in our design system, and did it change?"},
 ]
 
 

@@ -24,9 +24,11 @@ features:
       - title: "I'm new here — what's the story behind our pricing?"
         message: "What did we decide about pricing, and did anything change since?"
       - title: "Summarise recent decisions"
-        message: "What decisions did we make in the last two weeks?"
+        message: "What decisions did we make recently, and what changed?"
       - title: "How does the deployment pipeline work?"
         message: "How does the deployment pipeline work?"
+      - title: "What changed in our design system?"
+        message: "What is the base spacing unit in our design system, and did it change?"
   slash_commands:
     - command: /lore
       description: Deep-research a question across your Slack

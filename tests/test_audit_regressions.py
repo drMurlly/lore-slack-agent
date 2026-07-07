@@ -369,6 +369,19 @@ def test_home_view_is_interactive_and_valid():
     assert "10 channels" in dumped                       # dynamic index stats rendered
 
 
+def test_example_questions_are_answerable_backed():
+    """Every advertised example question must be backed by seeded history (no empty-state clicks).
+    The non-answerable 'API versioning' prompt was replaced by the design-system reversal."""
+    from conduit.assistant_surface import DEFAULT_SUGGESTED_PROMPTS
+    from conduit.blocks import HOME_EXAMPLES
+    joined = " ".join(p["title"] + " " + p["message"] for p in DEFAULT_SUGGESTED_PROMPTS)
+    assert "API versioning" not in joined
+    assert any("design system" in p["message"].lower() for p in DEFAULT_SUGGESTED_PROMPTS)
+    assert any("design system" in ex["q"].lower() for ex in HOME_EXAMPLES)
+    assert len(HOME_EXAMPLES) >= 6          # 'Try asking' row expanded to 4 + 2 primary CTAs
+    assert len(DEFAULT_SUGGESTED_PROMPTS) >= 4
+
+
 def test_home_ask_button_dms_the_user():
     import conduit.slack_app as slack_app
     client = MagicMock()
