@@ -163,51 +163,100 @@ def build_error_blocks(detail: str, last_step: Optional[str] = None) -> list[dic
     return blocks
 
 
-def build_lore_home_view() -> dict[str, Any]:
-    """Build Lore's App Home tab: pitch, example questions, how-it-works, For-Good line.
+# Starter questions surfaced as clickable buttons on the App Home. Clicking one DMs the asker a
+# cited answer (see slack_app.handle_home_ask). Kept short so the button labels stay readable.
+HOME_EXAMPLES: list[dict[str, str]] = [
+    {"label": "🔎 The pricing story",
+     "q": "What did we decide about pricing, and did anything change since?"},
+    {"label": "🧭 Recent decisions",
+     "q": "What decisions did we make recently, and what changed?"},
+    {"label": "👥 Q3 hiring plan",
+     "q": "How many engineers are we hiring in Q3, and did that number change?"},
+    {"label": "⚙️ API rate limit & region",
+     "q": "What is our API rate limit, and which region hosts the primary database?"},
+    {"label": "🔐 SSO policy",
+     "q": "What is our SSO policy for free-tier users?"},
+]
 
-    Published on ``app_home_opened`` so a judge who clicks the app sees an onboarding
-    surface instead of a blank tab.
 
-    Returns:
-        A ``home`` view Block Kit JSON.
+def build_lore_home_view(stats: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Build Lore's App Home tab — an interactive onboarding surface, not a wall of text.
+
+    Renders a hero pitch, primary call-to-action buttons, clickable example questions (each DMs
+    the asker a cited answer), a "how it works" walkthrough, an optional live-index status line,
+    and the Agent-for-Good framing. ``stats`` (optional ``{"channels": n, "messages": n}``) adds a
+    dynamic "currently indexing…" line when available.
+
+    Returns a ``home`` view Block Kit JSON. Published proactively (on interaction / open) so a
+    judge who clicks the app sees this instead of Slack's default placeholder.
     """
+    def _btn(i: int, primary: bool = False) -> dict[str, Any]:
+        # Each interactive element needs a UNIQUE action_id within a view; all route to the same
+        # handler via the ``home_ask`` prefix (see slack_app.build_app). The question is in ``value``.
+        ex = HOME_EXAMPLES[i]
+        b: dict[str, Any] = {
+            "type": "button",
+            "text": {"type": "plain_text", "text": ex["label"], "emoji": True},
+            "action_id": f"home_ask_{i}",
+            "value": ex["q"],
+        }
+        if primary:
+            b["style"] = "primary"
+        return b
+
     blocks: list[dict[str, Any]] = [
         {"type": "header",
-         "text": {"type": "plain_text", "text": "🧠 Lore — deep research over your Slack memory"}},
+         "text": {"type": "plain_text", "text": "🧠  Lore — your team's memory, answered", "emoji": True}},
         {"type": "section",
          "text": {"type": "mrkdwn",
-                  "text": "Ask a hard question. Lore decomposes it, searches across your "
-                          "channels and threads, builds a *knowledge graph* of decisions, "
-                          "resolves contradictions and timeline drift, and answers with "
-                          "*inline citations that deep-link to the exact source messages* — "
-                          "delivered as a Canvas report with a live research trace."}},
+                  "text": "Ask a hard question about your team's history. I *decompose* it, run a "
+                          "*multi-hop search* across your channels and threads, build a *knowledge "
+                          "graph* of decisions, *resolve contradictions and timeline drift*, and "
+                          "answer with *inline citations that deep-link to the exact source "
+                          "message* — as a Canvas report with a live research trace."}},
+        {"type": "actions", "elements": [
+            _btn(0, primary=True),
+            _btn(1),
+        ]},
+        {"type": "context",
+         "elements": [{"type": "mrkdwn",
+                       "text": "👆 Click one and I'll DM you a *cited* answer — or open the *Lore* "
+                               "assistant ▸, `@Lore` in a channel, or type `/lore <question>`."}]},
         {"type": "divider"},
-        {"type": "section",
-         "text": {"type": "mrkdwn", "text": "*Try asking:*"}},
-        {"type": "section",
-         "text": {"type": "mrkdwn",
-                  "text": "• _What did we decide about pricing, and did anything change since?_\n"
-                          "• _What decisions did we make in the last two weeks?_\n"
-                          "• _How does the deployment pipeline work?_"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "*Try asking:*"}},
+        {"type": "actions", "elements": [_btn(i) for i in range(2, 5)]},
         {"type": "divider"},
         {"type": "section",
          "text": {"type": "mrkdwn",
                   "text": "*How it works*\n"
-                          "1. 🔍 *Decompose* — break your question into sub-queries\n"
-                          "2. 🔎 *Multi-hop search* — fan out across channels, follow up on gaps\n"
-                          "3. 🕸️ *Knowledge graph* — link decisions, values and people over time\n"
-                          "4. 📄 *Cited answer* — a Canvas report; every claim deep-links to its source"}},
+                          "1. 🔍 *Decompose* — break your question into focused sub-queries\n"
+                          "2. 🔎 *Multi-hop search* — fan out across channels, resolve jargon via a "
+                          "real *MCP glossary*, follow up on thin coverage\n"
+                          "3. 🕸️ *Knowledge graph* — link decisions, values and people over time; "
+                          "resolve reversals *deterministically*\n"
+                          "4. 📄 *Cited answer* — a Canvas report where every claim deep-links to "
+                          "its exact source message"}},
+    ]
+
+    if stats and stats.get("channels"):
+        msgs = stats.get("messages")
+        count = f"*{msgs:,} messages* across " if isinstance(msgs, int) and msgs else ""
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
+                       "text": f"📚 Currently indexing {count}*{stats['channels']} channels* "
+                               f"you've invited me to."}]})
+
+    blocks += [
+        {"type": "divider"},
         {"type": "context",
          "elements": [{"type": "mrkdwn",
                        "text": "🤝 *An Agent for Good — knowledge equity:* every new hire, "
-                               "volunteer, or contributor gets the same instant, cited answer "
-                               "as a five-year veteran. Institutional memory shouldn't be a "
-                               "privilege of the tenured."}]},
+                               "volunteer, or contributor gets the same instant, cited answer as a "
+                               "five-year veteran. Institutional memory shouldn't be a privilege of "
+                               "the tenured."}]},
         {"type": "context",
          "elements": [{"type": "mrkdwn",
-                       "text": "Use `/lore <question>`, `@Lore`, or open the *Assistant* to research. "
-                               "Lore only sees channels it's invited to."}]},
+                       "text": "Lore only sees channels it's invited to — add me where the "
+                               "decisions live."}]},
     ]
     return {"type": "home", "blocks": blocks}
 

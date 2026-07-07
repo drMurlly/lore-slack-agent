@@ -354,6 +354,35 @@ def test_lore_no_double_post_when_delivered():
     hq.assert_not_called()   # delivered "" -> no fallback -> no double post
 
 
+# --- App Home: rich + interactive, valid Block Kit (unique action_ids), no placeholder -------- #
+def test_home_view_is_interactive_and_valid():
+    from conduit.blocks import build_lore_home_view
+    v = build_lore_home_view(stats={"channels": 10, "messages": 50})
+    assert v["type"] == "home"
+    btns = [e for b in v["blocks"] if b.get("type") == "actions" for e in b.get("elements", [])]
+    ids = [e["action_id"] for e in btns]
+    assert len(ids) >= 3 and len(ids) == len(set(ids))   # Slack requires unique action_ids per view
+    assert all(e["action_id"].startswith("home_ask") for e in btns)
+    assert all(e.get("value") for e in btns)             # each button carries a question
+    dumped = str(v)
+    assert "Conduit" not in dumped and "work in progress" not in dumped
+    assert "10 channels" in dumped                       # dynamic index stats rendered
+
+
+def test_home_ask_button_dms_the_user():
+    import conduit.slack_app as slack_app
+    client = MagicMock()
+    client.conversations_open.return_value = {"channel": {"id": "D123"}}
+    ack = MagicMock()
+    body = {"user": {"id": "U9"},
+            "actions": [{"action_id": "home_ask_0", "value": "What did we decide about pricing?"}]}
+    slack_app.handle_home_ask(ack=ack, body=body, client=client)
+    ack.assert_called_once()
+    client.conversations_open.assert_called_once_with(users="U9")
+    assert any(c.kwargs.get("channel") == "D123" and "Researching" in c.kwargs.get("text", "")
+               for c in client.chat_postMessage.call_args_list)
+
+
 # --- #3 the flagship demo cites the correct source for each claimed value ------------------- #
 def test_demo_citations_are_correctly_grounded():
     """Every '<value> [n]' claim in the demo answer must deep-link to a source that asserts it."""

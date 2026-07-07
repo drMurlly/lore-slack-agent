@@ -395,6 +395,7 @@ def handle_mention(body, event, say, client, logger=logger):
     from conduit.notify import notify_usage
     notify_usage("@mention", user=event.get("user", ""), text=text,
                  channel=event.get("channel", ""), client=client)
+    _publish_home(client, event.get("user", ""))  # populate their Home the first time we see them
     thread_ts = event.get("thread_ts") or event.get("ts")
     # Full money-shot in the thread: streaming trace → cited Canvas → decision timeline.
     # (The streamed trace posts within ~1s, so it doubles as the "researching…" feedback.)
@@ -414,6 +415,7 @@ def handle_thread_message(body, event, say, client, logger=logger):
         logger.debug("duplicate event %s — skipping", event_id)
         return
     text = event.get("text", "")
+    _publish_home(client, event.get("user", ""))
     # DMs get the same money-shot (streaming trace + cited Canvas + timeline) as every surface.
     research_and_respond(client, event.get("channel", ""), event.get("thread_ts"), text,
                          user_id=event.get("user", ""))
@@ -432,6 +434,7 @@ def handle_lore(body, ack, say, client, logger=logger, respond=None):
     from conduit.notify import notify_usage
     notify_usage("/lore", user=body.get("user_id", ""), text=text,
                  channel=body.get("channel_name", ""), client=client)
+    _publish_home(client, body.get("user_id", ""))
     # Interim feedback (ephemeral, only the invoker sees it) — the public streaming trace +
     # cited Canvas answer are posted by research_and_respond below.
     try:
@@ -452,15 +455,61 @@ def handle_lore(body, ack, say, client, logger=logger, respond=None):
             pass
 
 
+_HOME_PUBLISHED: set[str] = set()
+
+
+def _publish_home(client: Any, user_id: str, *, force: bool = False) -> None:
+    """Best-effort publish of the Lore App Home for a user. Because ``app_home_opened`` isn't
+    guaranteed to reach the app (it must be subscribed at install time), we ALSO publish the home
+    proactively the first time a user interacts — so the Home tab is populated (not Slack's default
+    placeholder) regardless. Idempotent per process (unless ``force``) so it never spams
+    views.publish; never raises."""
+    if not user_id or client is None:
+        return
+    if not force and user_id in _HOME_PUBLISHED:
+        return
+    try:
+        from conduit.blocks import build_lore_home_view
+        _HOME_PUBLISHED.add(user_id)  # set first so a failure doesn't retry-storm on every event
+        client.views_publish(user_id=user_id, view=build_lore_home_view())
+    except Exception:
+        logger.debug("home publish failed for %s", user_id, exc_info=True)
+
+
 def handle_app_home_opened(event, client, logger=logger):
     """Publish the Lore home tab when a user opens the app's Home."""
     if event.get("tab") != "home":
         return
+    _publish_home(client, event.get("user", ""), force=True)
+
+
+def handle_home_ask(ack, body, client, logger=logger):
+    """A Home example-question button was clicked → DM the asker a cited answer.
+
+    Acks immediately, opens a DM, posts an interim line, then runs the full research on a
+    background thread so the Bolt worker isn't blocked for the length of a research run."""
+    ack()
     try:
-        from conduit.blocks import build_lore_home_view
-        client.views_publish(user_id=event["user"], view=build_lore_home_view())
+        user = (body.get("user") or {}).get("id", "")
+        actions = body.get("actions") or []
+        question = (actions[0].get("value") if actions else "") or ""
+        if not user or not question:
+            return
+        im = client.conversations_open(users=user)
+        dm = (im.get("channel") or {}).get("id", "")
+        if not dm:
+            return
+        try:
+            client.chat_postMessage(channel=dm, text=f"🔎 Researching: *{question}*")
+        except Exception:
+            pass
+        import threading
+        threading.Thread(
+            target=lambda: research_and_respond(client, dm, None, question, user_id=user),
+            name="home-ask", daemon=True,
+        ).start()
     except Exception:
-        logger.exception("home publish failed")
+        logger.exception("home_ask handler failed")
 
 
 def handle_view_canvas_action(ack, logger=logger):
@@ -490,6 +539,7 @@ def assistant_user_message(payload, client, context, logger=logger):
     from conduit.notify import notify_usage
     notify_usage("assistant", user=payload.get("user", ""), text=payload.get("text", ""),
                  channel=channel, client=client)
+    _publish_home(client, payload.get("user", ""))
     research_and_respond(client, channel, thread_ts, payload.get("text", ""),
                          is_assistant=True, user_id=payload.get("user", ""))
 
@@ -532,6 +582,7 @@ def build_app():
     app.command("/lore")(handle_lore)
     app.event("app_home_opened")(handle_app_home_opened)
     app.action("view_canvas")(handle_view_canvas_action)
+    app.action(re.compile(r"^home_ask"))(handle_home_ask)  # all Home example buttons route here
 
     # Assistant split-view (Agents & AI Apps). Attach via app.assistant() (NOT app.use()) so
     # Bolt routes assistant-thread events to these handlers.
@@ -572,6 +623,27 @@ def main() -> int:
             logger.info("model warmup skipped/failed (will load on first query)", exc_info=True)
     import threading
     threading.Thread(target=_warm, daemon=True).start()
+
+    # Proactively publish the App Home for existing members of the channels Lore is in, so the Home
+    # tab shows the rich onboarding surface (not Slack's default placeholder) even for a judge who
+    # opens it without ever messaging Lore — app_home_opened isn't guaranteed to reach the app.
+    def _populate_homes():
+        try:
+            client = app.client
+            published = 0
+            for cid in list(_discover_channels(client))[:20]:
+                try:
+                    members = (client.conversations_members(channel=cid, limit=100).get("members") or [])
+                except Exception:
+                    continue
+                for uid in members:
+                    if uid and uid not in _HOME_PUBLISHED and published < 50:
+                        _publish_home(client, uid)
+                        published += 1
+            logger.info("App Home pre-published for %d workspace member(s)", published)
+        except Exception:
+            logger.debug("home pre-population skipped", exc_info=True)
+    threading.Thread(target=_populate_homes, daemon=True).start()
 
     from slack_bolt.adapter.socket_mode import SocketModeHandler
     logger.info("Lore starting in Socket Mode…")
