@@ -28,9 +28,9 @@ _More screens in [`docs/gallery/`](docs/gallery)._
 
 ## Platform technologies used (all three)
 
-- **Slack AI assistant capabilities** — Lore is an AI Assistant app: assistant split-view container, `assistant_thread_started` greeting, suggested prompts, status updates, and a live research trace streamed by editing one message in place as each phase completes (`src/conduit/assistant_surface.py`, `src/conduit/slack_app.py`, `src/conduit/blocks.py`).
-- **MCP server integration** — a real MCP client→server round-trip over the official `mcp` SDK: `servers/glossary_server.py` is a FastMCP server exposing an org glossary; `src/conduit/mcp_manager.py` is the stdio client. The research loop performs a genuine `initialize → tools/list → tools/call` handshake to resolve domain terms before searching.
-- **Real-Time Search API (as an interchangeable seam)** — `src/conduit/rts_client.py` defines the RTS-shaped `search(query) -> [SearchHit]` substrate. Because the RTS API is currently allowlisted, live retrieval runs through the interchangeable `SlackHistoryRTS` backend (`conversations.history` indexing + lexical/recency ranking, `src/conduit/live_rts.py`) behind the same seam — the pipeline runs on real workspace data today and swaps to the official RTS API by replacing one class.
+- **Slack AI assistant capabilities** — Lore is an AI Assistant app: assistant split-view container, `assistant_thread_started` greeting, suggested prompts, status updates, and a live research trace streamed by editing one message in place as each phase completes. The trace, the cited **Canvas**, and the Block Kit *Decision-Graph badge → decision timeline → conflicting-signals* card render on **every surface** — `/lore`, `@Lore`, DM, and the Assistant split-view — not just the assistant (`src/conduit/assistant_surface.py`, `src/conduit/slack_app.py`, `src/conduit/blocks.py`).
+- **MCP server integration** — a real MCP client→server round-trip over the official `mcp` SDK: `servers/glossary_server.py` is a FastMCP server exposing an org glossary; `src/conduit/mcp_manager.py` is the stdio client. The research loop performs a genuine `initialize → tools/list → tools/call` handshake to resolve domain terms, and **feeds the resolved definitions back into retrieval** — a question that mentions an acronym (`ARR`) also searches its long-form (`Annual Recurring Revenue`), surfacing evidence the raw keyword would miss. Remove the MCP consult and recall on jargon questions measurably drops (on by default; `LORE_MCP_GLOSSARY`).
+- **Real-Time / Search API (an interchangeable seam — and a working first-party backend)** — `src/conduit/rts_client.py` defines the RTS-shaped `search(query) -> [SearchHit]` substrate with three interchangeable backends behind one interface: **`RTSClient` calls Slack's official `search.messages` API** (functional today with a user token carrying `search:read`; wire it in via `LORE_USE_RTS_API=1` + `SLACK_USER_TOKEN`), **`SlackHistoryRTS`** indexes `conversations.history` with a lexical+recency ranker (`src/conduit/live_rts.py` — the **default**, because the sandbox app authenticates with a *bot* token and `search.messages` is user-token-only by Slack's platform rules), and **`FakeRTS`** for offline tests. The whole decompose → multi-hop → synthesis → Canvas pipeline runs unchanged on any backend; switching is one line in `_build_rts`.
 
 ## Architecture
 
@@ -71,7 +71,7 @@ flowchart TB
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest -q              # 154 passing, fully offline
+.venv/bin/python -m pytest -q              # 191 passing, fully offline
 .venv/bin/python scripts/run_demo.py       # the money-shot over a seeded corpus
 ```
 

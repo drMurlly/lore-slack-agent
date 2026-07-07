@@ -33,7 +33,7 @@ STORY: list[tuple[str, str, str]] = [
     ("pricing", "Maya (PM)", "Kicking off pricing for launch. Proposal: a single Pro tier at $29 per seat / month."),
     ("pricing", "Devon (Finance)", "Modeled it — $29 covers infra + support at our target margin. I'm good with $29."),
     ("pricing", "Maya (PM)", "Decision: we set the Pro pricing tier to $29 per seat for launch. Shipping it."),
-    ("engineering", "Priya (Eng)", "Deploy pipeline: merges to main auto-deploy to staging; prod is a manual gate + smoke tests."),
+    ("engineering", "Raj (Eng)", "Deploy pipeline: merges to main auto-deploy to staging; prod is a manual gate + smoke tests."),
     ("engineering", "Sam (SRE)", "Rollback is one command: `lore deploy rollback <sha>`. Runbook is in the canvas."),
     ("product", "Maya (PM)", "Q3 roadmap: ship the assistant split-view first, then the App Home onboarding."),
     ("general", "Nadia (Ops)", "Welcome new folks! If you're new, ask Lore — it cites its sources from our history."),

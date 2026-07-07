@@ -50,7 +50,12 @@ def load_config(path: str) -> Config:
     
     if data is None:
         data = {}
-    
+
+    # A top-level list/scalar (e.g. "- foo\n- bar" or "42") is not a valid config — fail with
+    # the documented ValueError, not an AttributeError from data.get() below.
+    if not isinstance(data, dict):
+        raise ValueError(f"Config root must be a mapping, got {type(data).__name__}")
+
     # Validate and extract model
     model = data.get('model', 'llama3.2')
     if not isinstance(model, str) or not model.strip():

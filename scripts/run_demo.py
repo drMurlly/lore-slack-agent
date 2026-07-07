@@ -9,6 +9,7 @@ report. Writes demo_output.json. Exits 0 on success, 1 on any exception.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import traceback
 from dataclasses import asdict
@@ -69,6 +70,22 @@ def seed_corpus() -> FakeRTS:
     return FakeRTS(corpus)
 
 
+def _value_indices(synthesis_prompt: str) -> dict[str, int]:
+    """Map each price value to the citation index of the evidence that actually asserts it.
+
+    The synthesis prompt lists evidence as ``[n] Channel: …\\nText: …\\nPermalink: …`` blocks. The
+    ranker reorders evidence, so a real model reads these indices and cites accordingly — this
+    fake does the same, instead of hardcoding [1]/[2] (which would deep-link each claim to the
+    WRONG source once the ranker moves the newest value to the top)."""
+    out: dict[str, int] = {}
+    for m in re.finditer(r"\[(\d+)\] Channel:.*?\nText: (.*?)\nPermalink:", synthesis_prompt, re.S):
+        idx, text = int(m.group(1)), m.group(2)
+        for val in ("$10", "$20"):
+            if val in text and val not in out:
+                out[val] = idx
+    return out
+
+
 class DemoLLMClient(LLMClient):
     """Deterministic LLM: decompose -> pricing sub-queries; synthesis -> cited reversal."""
 
@@ -79,10 +96,13 @@ class DemoLLMClient(LLMClient):
                                "Did the pricing tier change since launch?", "tool_calls": None}
         if "follow-up" in sysp or "fill gaps" in sysp:
             return {"content": "pricing tier change decision", "tool_calls": None}
-        # synthesis — emit [n] markers so citations populate; contradiction.py adds the
-        # deterministic current-value statement regardless.
-        return {"content": "The team set the pricing tier at $10 [1], then changed it to $20 [2] "
-                           "after a market review.", "tool_calls": None}
+        # synthesis — cite the ACTUAL evidence indices for each value so every [n] deep-links to
+        # the message that asserts it (contradiction.py still appends the deterministic current
+        # value). Falls back to 1/2 only if the prompt shape is unexpected.
+        idx = _value_indices(messages[-1].get("content", ""))
+        low, high = idx.get("$10", 1), idx.get("$20", 2)
+        return {"content": f"The team set the pricing tier at $10 [{low}], then changed it to "
+                           f"$20 [{high}] after a market review.", "tool_calls": None}
 
 
 def _trace(phase: str, detail: str) -> None:
@@ -110,6 +130,20 @@ def main() -> int:
         print("\n--- ANSWER ---")
         print(answer.text)
         print("--- END ANSWER ---\n")
+
+        # Grounding self-check: every "<value> [n]" claim must deep-link to a source message whose
+        # quote actually contains that value — this is Lore's headline promise, so the demo fails
+        # loudly rather than ever re-committing a mismatched artifact (the [1]->wrong-msg bug).
+        cite_by_index = {c.index: c for c in answer.citations}
+        for m in re.finditer(r"(\$\d[\d,]*)\s*\[(\d+)\]", answer.text):
+            value, idx = m.group(1), int(m.group(2))
+            cite = cite_by_index.get(idx)
+            if cite is None or value not in cite.quote:
+                print(f"GROUNDING ERROR: claim {value} [{idx}] does not link to a message "
+                      f"containing {value!r} (linked quote: {cite.quote if cite else None!r})",
+                      file=sys.stderr)
+                return 1
+        _trace("grounding", "every cited claim deep-links to a source that asserts its value ✓")
 
         graph = getattr(result, "graph", None)
         canvas = build_report(answer, QUESTION, graph=graph)

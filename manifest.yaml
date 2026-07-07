@@ -5,7 +5,7 @@ display_information:
   description: Deep-research agent for your team's Slack memory
   long_description: >-
     Ask a hard question; Lore decomposes it, runs a multi-hop search across your
-    channels, threads and files, builds a knowledge graph of decisions, resolves
+    channels and threads, builds a knowledge graph of decisions, resolves
     contradictions and timeline drift, and answers with inline citations that
     deep-link to the exact source messages - delivered as a Canvas report with a
     live streaming research trace.

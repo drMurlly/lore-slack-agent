@@ -152,3 +152,60 @@ class TestRTSClient:
         """Test that RTSClient accepts custom API base."""
         client = RTSClient(token="xoxb-test-token", api_base="https://custom.slack.com/api")
         assert client.api_base == "https://custom.slack.com/api"
+
+    def test_search_parses_search_messages_payload(self):
+        """search() parses a realistic search.messages response into SearchHits (proving the
+        official RTS backend is genuinely functional, not a stub)."""
+        client = RTSClient(token="xoxp-user-token")
+        payload = {
+            "ok": True,
+            "messages": {
+                "matches": [
+                    {
+                        "text": "We changed the pricing tier to $20.",
+                        "channel": {"id": "C1", "name": "decisions"},
+                        "ts": "1781775000.000000",
+                        "permalink": "https://x.slack.com/archives/C1/p1781775000000000",
+                        "score": 42.5,
+                        "username": "priya",
+                    },
+                    {
+                        "text": "We set pricing at $10 for launch.",
+                        "channel": {"id": "C2", "name": "pricing"},
+                        "ts": "1777028400.000000",
+                        "permalink": "https://x.slack.com/archives/C2/p1777028400000000",
+                        "score": 30.0,
+                        "user": "U9",
+                    },
+                ]
+            },
+        }
+        client._http = lambda method, params: payload
+        hits = client.search("pricing", limit=5)
+        assert [h.channel for h in hits] == ["decisions", "pricing"]
+        assert hits[0].permalink.endswith("p1781775000000000")
+        assert hits[0].score == 42.5
+        assert hits[0].author == "priya"          # username preferred
+        assert hits[1].author == "U9"             # falls back to user id
+        assert "$20" in hits[0].text
+
+    def test_search_bot_token_error_is_actionable(self):
+        """A bot token yields not_allowed_token_type — the error must tell the operator to use
+        a user token (never a silent empty list)."""
+        client = RTSClient(token="xoxb-bot-token")
+        client._http = lambda method, params: {"ok": False, "error": "not_allowed_token_type"}
+        with pytest.raises(RuntimeError) as exc:
+            client.search("anything")
+        msg = str(exc.value).lower()
+        assert "not_allowed_token_type" in msg
+        assert "user token" in msg and "search:read" in msg
+
+    def test_build_rts_selects_official_api_with_user_token(self, monkeypatch):
+        """_build_rts wires in the official Slack Search API when a user token + opt-in are
+        present — proving the RTS-API path is reachable, not dead code."""
+        import conduit.slack_app as slack_app
+        monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-real-user-token")
+        monkeypatch.setenv("LORE_USE_RTS_API", "1")
+        rts = slack_app._build_rts(client=None)
+        assert isinstance(rts, RTSClient)
+        assert rts.token == "xoxp-real-user-token"

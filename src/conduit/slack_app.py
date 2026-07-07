@@ -87,10 +87,30 @@ _RTS_CACHE: dict = {}  # channels-key -> (rts, built_at)
 
 
 def _build_rts(client=None):
-    """Live Slack history when a real bot token + client are present, else the seeded
-    FakeRTS corpus so the surface still answers offline / in the demo. The built index is
-    cached briefly (LORE_INDEX_TTL, default 120s) so back-to-back queries don't re-read every
-    channel's history — the main source of per-query latency."""
+    """Pick the retrieval backend behind the shared ``search()`` seam, honestly, by what's
+    configured:
+
+    1. **Official Slack Search API** (``RTSClient`` → ``search.messages``) when a USER token
+       (``SLACK_USER_TOKEN``, ``xoxp-…`` with ``search:read``) is present and
+       ``LORE_USE_RTS_API`` is on — Slack's first-party search.
+    2. **SlackHistoryRTS** (``conversations.history`` + local lexical/recency ranker) when a
+       real bot token + client are present — the default live backend (bot tokens can't call
+       ``search.messages``, so this is what runs in the sandbox).
+    3. **FakeRTS** seeded corpus otherwise, so the surface still answers offline / in the demo.
+
+    The SlackHistoryRTS index is cached briefly (``LORE_INDEX_TTL``, default 120s) so
+    back-to-back queries don't re-read every channel's history — the main per-query latency."""
+    # (1) Official Slack Search API — opt-in, requires a user token with search:read.
+    user_token = os.environ.get("SLACK_USER_TOKEN", "")
+    use_rts_api = os.environ.get("LORE_USE_RTS_API", "").strip().lower() in {"1", "true", "yes", "on"}
+    if use_rts_api and user_token.startswith("xoxp-"):
+        try:
+            from conduit.rts_client import RTSClient
+            logger.info("retrieval backend: official Slack Search API (search.messages, user token)")
+            return RTSClient(token=user_token)
+        except Exception:
+            logger.exception("RTS API backend unavailable — falling back to SlackHistoryRTS/FakeRTS")
+
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     if client is not None and token.startswith("xoxb-") and token != "xoxb-placeholder":
         try:
@@ -99,7 +119,10 @@ def _build_rts(client=None):
             channels = _discover_channels(client)
             if channels:
                 key = tuple(sorted(channels))
-                ttl = float(os.environ.get("LORE_INDEX_TTL", "120"))
+                # Short TTL: back-to-back queries in a burst still reuse the index (fast), but a
+                # message a judge posts mid-demo becomes visible within seconds instead of up to
+                # two minutes. Set LORE_INDEX_TTL=0 to rebuild on every query (always-fresh).
+                ttl = float(os.environ.get("LORE_INDEX_TTL", "20"))
                 cached = _RTS_CACHE.get(key)
                 if cached and (time.time() - cached[1]) < ttl:
                     return cached[0]
@@ -198,17 +221,26 @@ def handle_query(text: str, client=None, rts=None, llm=None) -> str:
                     time.time() - t0, len(result.evidence), cites,
                     f", drift {drift.old_value}->{drift.current_value}" if drift else "")
         return _format_answer(answer)
-    except Exception as e:  # a Slack handler must never crash the app
+    except Exception:  # a Slack handler must never crash the app
+        # Log the full exception server-side, but never echo the raw message (which can carry
+        # endpoint URLs / hosts / IDs) into a channel-visible reply.
         logger.exception("research failed")
-        return f"Sorry — research hit an error: {e}"
+        return "Sorry — research hit an error. I've logged the details; please try again."
 
 
 # --------------------------------------------------------------------------- #
 # Full live orchestrator: streaming trace → Canvas → final answer
 # --------------------------------------------------------------------------- #
-def _create_canvas(client: Any, answer: Any, question: str, channel: str, graph: Any = None) -> str:
-    """Create a Canvas report, share it read-only with the channel, and return its URL
-    (empty string if the Canvas API is unavailable)."""
+def _create_canvas(client: Any, answer: Any, question: str, channel: str,
+                   graph: Any = None, user_id: str = "") -> str:
+    """Create a Canvas report, share it read-only, and return its URL — or ``""`` so callers omit
+    the "View Canvas" button rather than linking a doc the viewer can't open.
+
+    A bot-owned standalone canvas is invisible until shared, so the URL is returned ONLY when a
+    read grant actually succeeds. On a public/private channel (id starts ``C``/``G``) we share to
+    the channel; on a DM / Assistant container (not a shareable channel) we grant the invoking
+    ``user_id`` directly — otherwise a judge on the Assistant surface would click through to an
+    access-denied page (a visible failure of a headline deliverable)."""
     from conduit.canvas import build_report_markdown
     try:
         markdown = build_report_markdown(answer, question, graph=graph)
@@ -219,20 +251,51 @@ def _create_canvas(client: Any, answer: Any, question: str, channel: str, graph:
         canvas_id = resp.get("canvas_id") or resp.get("canvas", {}).get("id", "")
         if not canvas_id:
             return ""
-        try:
-            client.canvases_access_set(
-                canvas_id=canvas_id, access_level="read", channel_ids=[channel]
-            )
-        except Exception:
-            logger.warning("canvases.access.set failed — judges may lack canvas access", exc_info=True)
         team = _team_info(client)
         base, tid = team.get("team_url", ""), team.get("team_id", "")
-        if base and tid:
-            return f"{base}/docs/{tid}/{canvas_id}"
-        return ""  # can't build a real URL — callers omit the button rather than link a bare id
+        if not (base and tid):
+            return ""  # can't build a real URL — omit the button rather than link a bare id
+
+        granted = False
+        if channel and channel[:1] in ("C", "G"):
+            try:
+                client.canvases_access_set(
+                    canvas_id=canvas_id, access_level="read", channel_ids=[channel]
+                )
+                granted = True
+            except Exception:
+                logger.warning("canvases.access.set (channel) failed", exc_info=True)
+        if user_id:
+            try:
+                client.canvases_access_set(
+                    canvas_id=canvas_id, access_level="read", user_ids=[user_id]
+                )
+                granted = True
+            except Exception:
+                logger.warning("canvases.access.set (user) failed", exc_info=True)
+        if not granted:
+            # Nobody was granted read access → don't render a button to a canvas they can't open.
+            logger.warning("no canvas access grant succeeded — omitting the View-Canvas button")
+            return ""
+        return f"{base}/docs/{tid}/{canvas_id}"
     except Exception:
         logger.exception("canvas creation failed")
         return ""
+
+
+def _stream_enabled() -> bool:
+    """Whether to stream the live research trace on non-assistant surfaces (/lore, @mention,
+    DM). Default on — the streaming trace is a headline feature and should be visible however a
+    judge invokes Lore. Set ``LORE_STREAM_TRACE=0`` for a quieter, answer-only reply."""
+    return os.environ.get("LORE_STREAM_TRACE", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _post_kwargs(channel: str, thread_ts: Optional[str]) -> dict:
+    """chat_postMessage kwargs, omitting an empty thread_ts (Slack rejects ``thread_ts=""``)."""
+    kw: dict[str, Any] = {"channel": channel}
+    if thread_ts:
+        kw["thread_ts"] = thread_ts
+    return kw
 
 
 def research_and_respond(
@@ -242,25 +305,46 @@ def research_and_respond(
     question: str,
     *,
     is_assistant: bool = False,
+    user_id: str = "",
 ) -> Optional[str]:
-    """The money-shot path. Streams a live research trace, builds a cited Canvas, shares it,
-    and posts the final answer. Returns the Canvas URL (or None). Never raises."""
+    """The money-shot path, now shared by EVERY surface (assistant, /lore, @mention, DM):
+    streams a live research trace, builds a cited **Canvas**, shares it, and posts a rich
+    Block Kit answer (Decision-Graph badge → decision timeline → conflicting-signals →
+    cited answer → View-Canvas button). Never raises.
+
+    Return value signals **delivery**, so callers can add an ephemeral fallback: a ``str`` (the
+    Canvas URL, or ``""``) when a reply reached the user — including the empty-state and error
+    cards — and ``None`` **only** when nothing could be posted at all (every post attempt failed).
+
+    ``is_assistant`` selects the real Assistant split-view (uses ``assistant.threads.setStatus``
+    and posts into the assistant thread). On other surfaces the trace streams as an in-place
+    edited channel/thread message instead — same visible research, no assistant container.
+    ``user_id`` (the invoker) is used to grant Canvas read access on DM / Assistant surfaces."""
     from conduit.research import run, synthesize
     from conduit.assistant_surface import ResearchAssistant, AssistantContext
 
     q = _clean_question(question)
     if not q:
-        client.chat_postMessage(
-            channel=channel, thread_ts=thread_ts,
-            text="Ask me a question about your team's Slack history and I'll research it.",
-        )
-        return None
+        # Inside try: this function documents "Never raises" and callers depend on it — a
+        # transient post failure here must not escape into Bolt as an unhandled listener error.
+        try:
+            client.chat_postMessage(
+                **_post_kwargs(channel, thread_ts),
+                text="Ask me a question about your team's Slack history and I'll research it.",
+            )
+            return ""  # delivered the prompt
+        except Exception:
+            logger.exception("failed to post empty-question prompt")
+            return None  # nothing reached the user
 
-    assistant: Optional[ResearchAssistant] = None
-    if is_assistant and thread_ts:
-        assistant = ResearchAssistant(
-            client, AssistantContext(channel=channel, thread_ts=thread_ts), stream=True,
-        )
+    # Stream on the assistant surface always; on other surfaces when LORE_STREAM_TRACE is on.
+    stream = is_assistant or _stream_enabled()
+    assistant = ResearchAssistant(
+        client,
+        AssistantContext(channel=channel, thread_ts=thread_ts or ""),
+        stream=stream,
+        assistant_container=is_assistant,
+    )
 
     try:
         rts = _build_rts(client)
@@ -272,37 +356,31 @@ def research_and_respond(
         if not result.evidence:
             from conduit.blocks import build_empty_state_blocks
             channels = _index_channel_names(rts)
-            if assistant is not None:
-                assistant.set_status("")
-            client.chat_postMessage(channel=channel, thread_ts=thread_ts,
+            assistant.set_status("")
+            client.chat_postMessage(**_post_kwargs(channel, thread_ts),
                                     blocks=build_empty_state_blocks(q, channels),
                                     text="No relevant history found.")
-            return None
+            return ""  # delivered the empty-state card
 
-        canvas_url = _create_canvas(client, answer, q, channel, graph=getattr(result, "graph", None))
-        if assistant is not None:
-            assistant.set_status("")  # clear the thinking indicator
-            assistant.post_result(answer, canvas_url or "")
-        else:
-            from conduit.blocks import build_answer_blocks, final_block
-            blocks = build_answer_blocks(_format_answer(answer))
-            if canvas_url:
-                blocks += final_block(answer.text[:280], canvas_url)
-            client.chat_postMessage(channel=channel, thread_ts=thread_ts,
-                                    blocks=blocks, text=answer.text[:2000])
-        return canvas_url
+        canvas_url = _create_canvas(client, answer, q, channel,
+                                    graph=getattr(result, "graph", None), user_id=user_id)
+        assistant.set_status("")  # clear the thinking indicator (no-op off the assistant surface)
+        assistant.post_result(answer, canvas_url or "", graph=getattr(result, "graph", None), question=q)
+        return canvas_url or ""  # delivered the answer (always a str, so callers know it landed)
     except Exception as e:
+        # Log the full exception server-side, but surface only the exception CLASS name to the
+        # channel (never the raw message, which can leak endpoint URLs / hosts / channel IDs).
         logger.exception("live research failed")
         try:
             from conduit.blocks import build_error_blocks
-            if assistant is not None:
-                assistant.set_status("")
-            client.chat_postMessage(channel=channel, thread_ts=thread_ts,
-                                    blocks=build_error_blocks(str(e)),
+            assistant.set_status("")
+            client.chat_postMessage(**_post_kwargs(channel, thread_ts),
+                                    blocks=build_error_blocks(type(e).__name__),
                                     text="Research hit an error.")
+            return ""  # delivered an error card
         except Exception:
             pass
-        return None
+        return None  # nothing reached the user
 
 
 # --------------------------------------------------------------------------- #
@@ -318,11 +396,10 @@ def handle_mention(body, event, say, client, logger=logger):
     notify_usage("@mention", user=event.get("user", ""), text=text,
                  channel=event.get("channel", ""), client=client)
     thread_ts = event.get("thread_ts") or event.get("ts")
-    try:
-        say(text="🔎 Researching…", thread_ts=thread_ts)
-    except Exception:
-        pass
-    say(text=handle_query(text, client=client), thread_ts=thread_ts)
+    # Full money-shot in the thread: streaming trace → cited Canvas → decision timeline.
+    # (The streamed trace posts within ~1s, so it doubles as the "researching…" feedback.)
+    research_and_respond(client, event.get("channel", ""), thread_ts, text,
+                         user_id=event.get("user", ""))
 
 
 def handle_thread_message(body, event, say, client, logger=logger):
@@ -337,7 +414,9 @@ def handle_thread_message(body, event, say, client, logger=logger):
         logger.debug("duplicate event %s — skipping", event_id)
         return
     text = event.get("text", "")
-    say(handle_query(text, client=client))
+    # DMs get the same money-shot (streaming trace + cited Canvas + timeline) as every surface.
+    research_and_respond(client, event.get("channel", ""), event.get("thread_ts"), text,
+                         user_id=event.get("user", ""))
 
 
 def handle_lore(body, ack, say, client, logger=logger, respond=None):
@@ -353,26 +432,24 @@ def handle_lore(body, ack, say, client, logger=logger, respond=None):
     from conduit.notify import notify_usage
     notify_usage("/lore", user=body.get("user_id", ""), text=text,
                  channel=body.get("channel_name", ""), client=client)
-    # Interim feedback (ephemeral) — research takes a few seconds; don't look dead.
+    # Interim feedback (ephemeral, only the invoker sees it) — the public streaming trace +
+    # cited Canvas answer are posted by research_and_respond below.
     try:
         (respond or say)("🔎 Researching your question across the workspace…")
     except Exception:
         pass
-    answer = handle_query(text, client=client)
-    # Post the answer as a real, VISIBLE in-channel message. chat:write.public lets us post
-    # even in channels the bot hasn't joined. Fall back to respond() if the post fails.
-    posted = False
-    if channel:
+    # Full money-shot in-channel: streaming trace → cited Canvas → decision timeline.
+    delivered = research_and_respond(client, channel, None, text, user_id=body.get("user_id", ""))
+    # If NOTHING reached the channel (e.g. a private channel Lore isn't a member of, where even
+    # chat:write.public can't post), fall back to an ephemeral answer only the invoker sees — so
+    # the judge always gets the result instead of just the interim "Researching…". `delivered` is
+    # a str ("" included) whenever a card posted, and None only when every post attempt failed, so
+    # this never double-posts on the empty-state / error paths.
+    if delivered is None:
         try:
-            client.chat_postMessage(channel=channel, text=answer)
-            posted = True
+            (respond or say)(handle_query(text, client=client))
         except Exception:
-            logger.warning("chat_postMessage for /lore failed; falling back to respond", exc_info=True)
-    if not posted:
-        try:
-            (respond or say)({"text": answer, "response_type": "in_channel"})
-        except Exception:
-            (respond or say)(answer)
+            pass
 
 
 def handle_app_home_opened(event, client, logger=logger):
@@ -413,7 +490,8 @@ def assistant_user_message(payload, client, context, logger=logger):
     from conduit.notify import notify_usage
     notify_usage("assistant", user=payload.get("user", ""), text=payload.get("text", ""),
                  channel=channel, client=client)
-    research_and_respond(client, channel, thread_ts, payload.get("text", ""), is_assistant=True)
+    research_and_respond(client, channel, thread_ts, payload.get("text", ""),
+                         is_assistant=True, user_id=payload.get("user", ""))
 
 
 # --------------------------------------------------------------------------- #

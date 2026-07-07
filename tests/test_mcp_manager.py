@@ -270,11 +270,15 @@ class TestResearchPipelineWiring:
         )
 
         assert result.glossary == [{"term": "ARR", "definition": "Annual Recurring Revenue"}]
+        # lookup_terms is called once; the expansion reuses the entries (no extra MCP call).
         assert manager.calls == [("lookup_terms", {"text": "What is our ARR target?"})]
         glossary_traces = [t for t in assistant.traces if t[0] == "glossary"]
-        assert len(glossary_traces) == 1
+        # Two glossary trace lines now: the resolved term, then the retrieval expansion it drove.
+        assert len(glossary_traces) == 2
         assert "1 term(s) via MCP" in glossary_traces[0][1]
         assert "ARR" in glossary_traces[0][1]
+        assert "expanded search" in glossary_traces[1][1]
+        assert "Annual Recurring Revenue" in glossary_traces[1][1]
 
     def test_run_defaults_to_no_glossary_consult(self, monkeypatch):
         monkeypatch.delenv("LORE_MCP_GLOSSARY", raising=False)

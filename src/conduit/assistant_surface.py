@@ -88,13 +88,29 @@ class ResearchAssistant:
     client: SlackClient
     context: AssistantContext
     stream: bool = False
+    # True only in the real Assistant split-view, where ``assistant.threads.setStatus`` is a
+    # valid call. On a plain channel/thread surface (``/lore``, ``@mention``, DM) that API
+    # rejects the request, so we skip it and rely on the streamed trace message instead.
+    assistant_container: bool = True
     _trace: list[str] = field(default_factory=list, init=False)
     _trace_ts: Optional[str] = field(default=None, init=False)
     _trace_blocks: list = field(default_factory=list, init=False)
+    _posted: bool = field(default=False, init=False)          # have we attempted the first post?
+    _stream_disabled: bool = field(default=False, init=False)  # give up streaming (buffer only)
+
+    def _msg_kwargs(self) -> dict:
+        """Base ``chat_postMessage`` kwargs — include ``thread_ts`` only when we actually have a
+        thread (a ``/lore`` slash command has none, and Slack rejects an empty ``thread_ts``)."""
+        kw: dict[str, Any] = {"channel": self.context.channel}
+        if self.context.thread_ts:
+            kw["thread_ts"] = self.context.thread_ts
+        return kw
 
     def set_status(self, status: str) -> None:
         """Update the split-view thinking indicator (one API call). Defensive: a failed status
         update (e.g. outside a real assistant container) must never break the research run."""
+        if not self.assistant_container:
+            return  # not in an Assistant split-view — setStatus would 400; the trace covers it
         try:
             self.client.assistant_threads_setStatus(
                 channel_id=self.context.channel,
@@ -112,8 +128,16 @@ class ResearchAssistant:
             self._stream_step(phase, detail)
 
     def _stream_step(self, phase: str, detail: str) -> None:
-        """Render one trace step into the single, edited-in-place research message."""
+        """Render one trace step into the single, edited-in-place research message.
+
+        Posts exactly once, then edits that message in place. If the first post's ``ts`` can't be
+        captured (unparseable response, or the post raised after Slack accepted it), streaming is
+        disabled for the rest of the run — otherwise every subsequent step would post a NEW card
+        and flood the channel/thread. ``_posted`` is set BEFORE the post attempt so a raised
+        exception can never cause a re-post."""
         from conduit.blocks import trace_block, TraceStep
+        if self._stream_disabled:
+            return
         try:
             if not self._trace_blocks:
                 self._trace_blocks.append({
@@ -122,13 +146,16 @@ class ResearchAssistant:
                 })
             self._trace_blocks.append(trace_block(TraceStep(phase, detail)))
             blocks = self._trace_blocks[-48:]  # stay under Slack's 50-block cap
-            if self._trace_ts is None:
+            if not self._posted:
+                self._posted = True  # set first: never post a second card even if this raises
                 resp = self.client.chat_postMessage(
-                    channel=self.context.channel, thread_ts=self.context.thread_ts,
-                    blocks=blocks, text="Researching…",
+                    **self._msg_kwargs(), blocks=blocks, text="Researching…",
                 )
                 self._trace_ts = _extract_ts(resp)
-            else:
+                if self._trace_ts is None:
+                    # no message id to edit → stop streaming rather than flooding with new cards
+                    self._stream_disabled = True
+            elif self._trace_ts is not None:
                 self.client.chat_update(
                     channel=self.context.channel, ts=self._trace_ts,
                     blocks=blocks, text="Researching…",
@@ -142,21 +169,26 @@ class ResearchAssistant:
         """Copy of the accumulated trace lines, in order."""
         return self._trace.copy()
     
-    def post_result(self, answer: Answer, canvas_url: str) -> Any:
-        """Post final result with trace context and citations.
-        
+    def post_result(self, answer: Answer, canvas_url: str,
+                    graph: Any = None, question: str = "") -> Any:
+        """Post the final result card: the money-shot (Decision-Graph badge → decision timeline
+        → conflicting-signals) then the cited answer and a "View Canvas" button.
+
         Args:
-            answer: The synthesized answer with citations.
-            canvas_url: URL to the Canvas report.
-            
+            answer: The synthesized answer with citations, drift, and graph_summary.
+            canvas_url: URL to the Canvas report (button omitted when empty).
+            graph: The KnowledgeGraph, so the decision timeline can be rendered inline.
+            question: The original question (drives the graph's primary-topic timeline).
+
         Returns:
             The result of chat_postMessage.
         """
-        from conduit.blocks import final_block
+        from conduit.blocks import final_block, build_money_shot_blocks
 
-        # Build context block with trace lines
+        # Trace context — only when NOT streaming. When streaming, the live trace message
+        # already persists in the thread, so re-appending it here would duplicate it.
         context_blocks = []
-        if self._trace:
+        if self._trace and not self.stream:
             context_text = "\n".join(self._trace)[:2800]
             context_blocks = [{
                 "type": "section",
@@ -165,6 +197,10 @@ class ResearchAssistant:
                     "text": f"*Research Trace:*\n{context_text}"
                 }
             }]
+
+        # Money-shot: graph badge + decision timeline + conflicting-signals — the same
+        # structured proof the Canvas shows, now visible on EVERY surface (not just Canvas).
+        money_shot_blocks = build_money_shot_blocks(answer, graph=graph, question=question)
 
         # Final answer + Canvas button (button omitted when there's no Canvas URL, since
         # Block Kit rejects an empty/invalid url).
@@ -180,14 +216,19 @@ class ResearchAssistant:
             }]
 
         # Citation blocks — cap at 5 so the total stays under Slack's 50-block limit; the
-        # full list lives in the Canvas.
+        # full list lives in the Canvas. The quote is UNTRUSTED indexed text → escape it so it
+        # can't inject a link/markup; guard an empty permalink so we render #channel, not `<|#…>`.
+        from conduit.textsafe import mrkdwn_safe
         citation_blocks = []
         for citation in answer.citations[:5]:
+            where = (f"<{citation.permalink}|#{citation.channel}>"
+                     if citation.permalink else f"#{citation.channel}")
+            quote = mrkdwn_safe(citation.quote[:100])
             citation_blocks.append({
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"<{citation.permalink}|#{citation.channel}>: {citation.quote[:100]}"
+                    "text": f"{where}: {quote}"
                 }
             })
         if len(answer.citations) > 5:
@@ -198,11 +239,10 @@ class ResearchAssistant:
             })
 
         # Combine all blocks
-        all_blocks = context_blocks + final_blocks + citation_blocks
-        
+        all_blocks = context_blocks + money_shot_blocks + final_blocks + citation_blocks
+
         return self.client.chat_postMessage(
-            channel=self.context.channel,
-            thread_ts=self.context.thread_ts,
+            **self._msg_kwargs(),
             blocks=all_blocks,
             text=answer.text
         )

@@ -60,88 +60,68 @@ def build_answer_blocks(
     return blocks
 
 
-def build_home_view(servers: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build the home tab view listing MCP servers and their tools.
-    
-    Args:
-        servers: List of server dicts with 'name' and 'tools' keys.
-                 Each tool dict should have 'name' key.
-    
-    Returns:
-        Home tab view Block Kit JSON.
+def build_money_shot_blocks(answer: Any, graph: Any = None, question: str = "") -> list[dict[str, Any]]:
+    """The structured proof-of-research, as Block Kit — so it shows on every Slack surface,
+    not only inside the Canvas.
+
+    Renders (when present):
+      * a *Decision Graph* badge (entities · decisions · reversals),
+      * a *Decision timeline* (oldest→newest values with deep-links, current value bolded),
+      * a *Conflicting signals* section when a reversal was detected (the money-shot).
+
+    Everything is grounded in the knowledge graph / drift already on the ``answer``; returns an
+    empty list when there's nothing structured to show (so a plain answer stays clean).
     """
+    from conduit.knowledge_graph import graph_badge_from_summary
+    from conduit.contradiction import conflict_canvas_section
+
     blocks: list[dict[str, Any]] = []
-    
-    # Header
-    blocks.append({
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": "🤖 Conduit Agent - MCP Servers",
-        },
-    })
-    
-    # Add a divider
-    blocks.append({
-        "type": "divider",
-    })
-    
-    # List each server and its tools
-    for i, server in enumerate(servers):
-        server_name = server.get("name", "Unknown Server")
-        tools = server.get("tools", [])
-        
-        # Server name section
+
+    summary = getattr(answer, "graph_summary", None)
+    if summary:
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": graph_badge_from_summary(summary)}],
+        })
+
+    rows: list[dict[str, str]] = []
+    if graph is not None:
+        try:
+            rows = graph.decision_rows(question)
+        except Exception:
+            rows = []
+    if len(rows) >= 2:
+        # Cap the rows AND clip the joined text: a noisy/num-heavy topic can yield dozens–hundreds
+        # of decision rows, and an unclipped section past Slack's 3000-char limit makes
+        # chat_postMessage reject the whole message (invalid_blocks) — losing the entire answer.
+        _MAX_ROWS = 12
+        lines = ["🕸️ *Decision timeline*"]
+        shown = rows if len(rows) <= _MAX_ROWS else rows[: _MAX_ROWS - 1]
+        for r in shown:
+            where = f"<{r['permalink']}|#{r['channel']}>" if r.get("permalink") else f"#{r.get('channel','')}"
+            lines.append(f"• *{r['value']}* — {where}")
+        if len(rows) > _MAX_ROWS:
+            lines.append(f"• …and {len(rows) - (_MAX_ROWS - 1)} more")
+        # The current value line is appended AFTER the cap so it always survives.
+        lines.append(f"*Current: {rows[-1]['value']}*")
         blocks.append({
             "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*{server_name}*",
-            },
+            "text": {"type": "mrkdwn", "text": _clip("\n".join(lines))},
         })
-        
-        # Tools list for this server
-        if tools:
-            tool_names = [tool.get("name", "Unknown Tool") for tool in tools]
-            tools_list = "\n".join(f"• {name}" for name in tool_names)
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"Tools:\n{tools_list}",
-                },
-            })
-        else:
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "No tools registered",
-                },
-            })
-        
-        # Add divider between servers (except after the last one) — compare by position,
-        # not dict value (two identical server dicts must not collapse the divider).
-        if i < len(servers) - 1:
-            blocks.append({
-                "type": "divider",
-            })
-    
-    # Footer context
-    blocks.append({
-        "type": "context",
-        "elements": [
-            {
-                "type": "mrkdwn",
-                "text": f"Total servers: {len(servers)}",
-            },
-        ],
-    })
-    
-    return {
-        "type": "home",
-        "blocks": blocks,
-    }
+
+    conflict = conflict_canvas_section(getattr(answer, "drift", None))
+    if conflict:
+        blocks.append(conflict)
+        # Make the differentiator legible: the current value is resolved from timeline-ordered
+        # evidence, not guessed by the model — the one thing a plain search wrapper can't do.
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn",
+                          "text": "🔒 _Resolved deterministically — the current value is read from "
+                                  "timeline-ordered evidence, not generated by the model._"}],
+        })
+
+    return blocks
 
 
 def build_empty_state_blocks(question: str, channels: Optional[list[str]] = None) -> list[dict[str, Any]]:

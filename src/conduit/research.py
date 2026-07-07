@@ -56,6 +56,19 @@ class ResearchResult:
     glossary: list = field(default_factory=list)
 
 
+def _evidence_key(hit: Any) -> str:
+    """Stable identity for evidence dedup — permalink when present, else ``channel:ts``.
+
+    Keying on permalink alone collapses DISTINCT messages whenever a backend omits the permalink
+    (``RTSClient`` sets it to ``""`` when ``search.messages`` doesn't return one): two different
+    decisions both keyed to ``""`` merge into one, silently dropping evidence — and potentially
+    hiding the exact reversal Lore exists to surface."""
+    permalink = getattr(hit, "permalink", "") or ""
+    if permalink:
+        return permalink
+    return f"{getattr(hit, 'channel', '')}:{getattr(hit, 'ts', '')}"
+
+
 def _decompose_question(question: str, llm: LLMClient) -> list[str]:
     """Decompose a question into sub-queries using the LLM.
     
@@ -116,11 +129,21 @@ def _gather_evidence(
     Returns:
         Tuple of (list of Evidence, number of search calls made).
     """
-    evidence_by_permalink: dict[str, Evidence] = {}
+    evidence_by_key: dict[str, Evidence] = {}
     search_calls = 0
 
     for sub_query in sub_queries:
-        hits = rts.search(sub_query, limit=limit_per_query)
+        try:
+            hits = rts.search(sub_query, limit=limit_per_query)
+        except Exception as exc:
+            # Per-sub-query isolation: one transient search failure (rate_limit, network blip on
+            # the official RTS backend) must not discard the evidence already gathered from the
+            # other sub-queries. Log, trace, and move on.
+            logger.warning("search failed for sub-query %r: %s", sub_query[:80], exc)
+            if assistant is not None:
+                assistant.emit_trace("search", f"“{sub_query}” → error (skipped)")
+            search_calls += 1
+            continue
         search_calls += 1
 
         if assistant is not None:
@@ -130,12 +153,13 @@ def _gather_evidence(
             assistant.emit_trace("search", f"“{sub_query}” → {len(hits)} hits{where}")
 
         for hit in hits:
-            existing = evidence_by_permalink.get(hit.permalink)
+            key = _evidence_key(hit)
+            existing = evidence_by_key.get(key)
             if existing is not None:
-                # Keep one Evidence per permalink, but retain the best score seen.
+                # Keep one Evidence per message, but retain the best score seen.
                 existing.score = max(existing.score, hit.score)
             else:
-                evidence_by_permalink[hit.permalink] = Evidence(
+                evidence_by_key[key] = Evidence(
                     text=hit.text,
                     channel=hit.channel,
                     ts=hit.ts,
@@ -147,7 +171,7 @@ def _gather_evidence(
                 )
 
     # Sort by score descending
-    evidence_list = list(evidence_by_permalink.values())
+    evidence_list = list(evidence_by_key.values())
     evidence_list.sort(key=lambda e: e.score, reverse=True)
     
     # Assign citation indices
@@ -245,6 +269,31 @@ def _consult_glossary(
     return entries
 
 
+def _glossary_expansions(entries: list) -> list[str]:
+    """Turn resolved glossary entries into extra search queries.
+
+    This is what makes the MCP consult *matter* (not just decorate the result): the canonical
+    long-form of each term becomes an additional sub-query, so a question that only mentions an
+    acronym ("ARR") still retrieves messages that spell it out ("Annual Recurring Revenue") —
+    evidence the raw keyword search would miss. Remove the MCP round-trip and recall on
+    acronym/jargon questions measurably drops.
+    """
+    out: list[str] = []
+    for e in entries or []:
+        if not isinstance(e, dict):
+            continue
+        term = str(e.get("term", "")).strip()
+        definition = str(e.get("definition", "")).strip()
+        if not definition:
+            continue
+        # The canonical long-form is the phrase before the "— …" gloss (em/en dash or hyphen).
+        head = re.split(r"\s[—–-]\s", definition, maxsplit=1)[0].strip()
+        expansion = head if head and head.lower() != term.lower() else definition
+        if expansion and expansion not in out:
+            out.append(expansion)
+    return out
+
+
 def run(
     question: str,
     rts: Any,
@@ -290,6 +339,18 @@ def run(
     # (optional + defensive; no-op unless enabled or a manager is injected).
     glossary_entries = _consult_glossary(question, glossary, assistant=assistant)
 
+    # Feed the resolved definitions back into retrieval: each term's canonical long-form
+    # becomes an extra sub-query, so acronym/jargon questions ("ARR") also match spelled-out
+    # evidence. This is the MCP consult *earning its place* — not just annotating the result.
+    glossary_expansions: list[str] = []
+    if glossary_entries:
+        glossary_expansions = _glossary_expansions(glossary_entries)
+        added = [e for e in glossary_expansions[:3] if e not in sub_queries]
+        if added:
+            sub_queries = sub_queries + added
+            if assistant is not None:
+                assistant.emit_trace("glossary", "expanded search via MCP: " + "; ".join(added))
+
     evidence, _ = _gather_evidence(sub_queries, rts, assistant=assistant)
     
     follow_up_count = 0
@@ -304,14 +365,15 @@ def run(
         follow_up_query = _generate_follow_up_query(question, evidence, llm)
         follow_up_evidence, _ = _gather_evidence([follow_up_query], rts, assistant=assistant)
 
-        # Dedup follow-up evidence against existing, keeping the best score per permalink
-        evidence_by_permalink = {e.permalink: e for e in evidence}
+        # Dedup follow-up evidence against existing, keeping the best score per message
+        evidence_by_key = {_evidence_key(e): e for e in evidence}
         for fe in follow_up_evidence:
-            existing = evidence_by_permalink.get(fe.permalink)
+            key = _evidence_key(fe)
+            existing = evidence_by_key.get(key)
             if existing is not None:
                 existing.score = max(existing.score, fe.score)
             else:
-                evidence_by_permalink[fe.permalink] = fe
+                evidence_by_key[key] = fe
                 evidence.append(fe)
 
         # Re-sort and re-index
@@ -324,7 +386,7 @@ def run(
     # Re-rank by relevance to the ORIGINAL question and keep the most relevant, so a broad
     # corpus doesn't dilute synthesis with cross-topic hits. Sub-query scores aren't comparable
     # across queries; overlap with the actual question is the honest final signal.
-    evidence = _rank_by_question(question, evidence, top_k=8)
+    evidence = _rank_by_question(question, evidence, top_k=8, expansions=glossary_expansions)
     for i, ev in enumerate(evidence, start=1):
         ev.citation_index = i
 
@@ -345,25 +407,49 @@ def run(
     )
 
 
-def _rank_by_question(question: str, evidence: list[Evidence], top_k: int = 8) -> list[Evidence]:
-    """Order evidence by content-word overlap with the question (tie-broken by recency), keep
-    the top ``top_k``. Evidence with no overlap is kept only to fill up to ``top_k``."""
+def _rank_by_question(
+    question: str,
+    evidence: list[Evidence],
+    top_k: int = 8,
+    expansions: Optional[list[str]] = None,
+) -> list[Evidence]:
+    """Order evidence by topic overlap with the question (tie-broken by recency) and keep the top
+    ``top_k`` — but DROP zero-overlap off-topic prose so it can't dilute synthesis with unrelated
+    hits (the observed "MFA note cited in a pricing answer" leak).
+
+    Two protections keep this from starving the money-shot:
+      * overlap is measured against the question keywords UNION the MCP glossary ``expansions`` (so
+        an "ARR" question keeps evidence that only spells out "Annual Recurring Revenue"), and
+      * value-bearing evidence (money/pct) is always kept — a terse "changed it to $20" that omits
+        the topic word is exactly the reversal signal the resolver needs.
+    Never returns empty: if nothing survives, fall back to the ranked list."""
     import re as _re
-    from conduit.contradiction import _keywords, _norm
-    qwords = {_norm(w) for w in _keywords(question, None)}
-    if not qwords:
+    from conduit.contradiction import _keywords, _light_stem, extract_typed_values
+
+    qstems = {_light_stem(w) for w in _keywords(question, None)}
+    for exp in (expansions or []):
+        for w in _re.findall(r"[a-zA-Z][a-zA-Z0-9_-]*", exp):
+            qstems.add(_light_stem(w))
+    if not qstems:
         return evidence[:top_k]
 
-    def rel(ev: Evidence) -> tuple[int, float]:
-        words = {_norm(w) for w in _re.findall(r"[a-zA-Z][a-zA-Z0-9_-]*", ev.text or "")}
-        overlap = len(qwords & words)
-        try:
-            recency = float(ev.ts)
-        except (TypeError, ValueError):
-            recency = 0.0
-        return (overlap, recency)
+    def _overlap(ev: Evidence) -> int:
+        stems = {_light_stem(w) for w in _re.findall(r"[a-zA-Z][a-zA-Z0-9_-]*", ev.text or "")}
+        return len(qstems & stems)
 
-    ranked = sorted(evidence, key=rel, reverse=True)
+    def _recency(ev: Evidence) -> float:
+        try:
+            return float(ev.ts)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _value_bearing(ev: Evidence) -> bool:
+        return any(c in ("money", "pct") for c, _ in extract_typed_values(ev.text or ""))
+
+    scored = [(ev, _overlap(ev), _recency(ev)) for ev in evidence]
+    scored.sort(key=lambda t: (t[1], t[2]), reverse=True)
+    kept = [ev for ev, ov, _ in scored if ov > 0 or _value_bearing(ev)]
+    ranked = kept if kept else [ev for ev, _, _ in scored]
     return ranked[:top_k]
 
 

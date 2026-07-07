@@ -229,6 +229,12 @@ Example: The team set pricing at $10 [1], then raised it to $20 [2]; the current
     if drift:
         text = resolve_answer_text(text, drift)
 
+    # Defuse any Slack control sequences (broadcast pings / links) an injected message could have
+    # steered the model to emit — the answer body is rendered raw on every surface, unlike the
+    # citation quotes which are already escaped. Keeps [n] markers so deep-links still render.
+    from conduit.textsafe import neutralize_answer_body
+    text = neutralize_answer_body(text)
+
     return Answer(
         text=text,
         citations=citations,

@@ -87,3 +87,35 @@ def test_conflict_canvas_section_shape():
     assert "https://slack.com/p1" in txt and "https://slack.com/p2" in txt
     assert "$10" in txt and "$20" in txt
     assert conflict_canvas_section(None) is None
+
+
+def test_wording_split_pricing_vs_price_still_detects_reversal():
+    """Robustness (light-stem): the question says 'pricing' but the evidence says 'price'.
+    Previously the plural-only normaliser missed this and could HIDE the reversal; the light
+    stem unifies price/pricing so the $10 -> $20 change is still resolved to the current value."""
+    from conduit.knowledge_graph import build_graph
+    q = "What did we decide about pricing?"
+    evidence = [
+        _ev("We set the price at $10 for launch.", "1000.000100", channel="pricing"),
+        _ev("We later changed the price to $20.", "2000.000200", channel="decisions"),
+    ]
+    drift = detect_drift(evidence, question=q)
+    assert drift is not None
+    assert drift.old_value == "$10"
+    assert drift.new_value == "$20"
+    assert drift.current_value == "$20"
+
+    # The knowledge graph anchors both values on ONE topic and yields a 2-step timeline.
+    graph = build_graph(evidence, question=q)
+    rows = graph.decision_rows(q)
+    assert [r["value"] for r in rows] == ["$10", "$20"]
+
+
+def test_light_stem_does_not_overmerge_distinct_words():
+    """The light stem must keep genuinely different words apart (no crude 4-char collisions)."""
+    from conduit.contradiction import _light_stem
+    assert _light_stem("pricing") == _light_stem("price") == _light_stem("priced")
+    assert _light_stem("hiring") == _light_stem("hire")
+    assert _light_stem("required") != _light_stem("requests")
+    assert _light_stem("company") != _light_stem("competitors")
+    assert _light_stem("policy") != _light_stem("police")

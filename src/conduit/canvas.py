@@ -133,7 +133,10 @@ def build_report_markdown(answer: Answer, question: str, graph: Any = None) -> s
     Returns:
         A markdown string ready for ``canvases.create``.
     """
-    lines: list[str] = [f"# Research: {question}", ""]
+    from conduit.textsafe import markdown_safe, oneline
+    # The question and quotes are untrusted (user input / raw indexed messages) — neutralize
+    # markup so they can't inject a link/heading into the trusted Canvas, and keep the H1 one line.
+    lines: list[str] = [f"# Research: {markdown_safe(oneline(question, 200))}", ""]
 
     if answer.graph_summary:
         badge = graph_badge_from_summary(answer.graph_summary)
@@ -169,8 +172,9 @@ def build_report_markdown(answer: Answer, question: str, graph: Any = None) -> s
     if answer.citations:
         lines += ["---", "", "## Sources", ""]
         for c in sorted(answer.citations, key=lambda x: x.index):
-            quote = c.quote.replace("\n", " ").strip()
-            lines.append(f"{c.index}. [#{c.channel}]({c.permalink}) — \"{quote}\"")
+            quote = markdown_safe(oneline(c.quote))  # untrusted message text → no active markup
+            where = f"[#{c.channel}]({c.permalink})" if c.permalink else f"#{c.channel}"
+            lines.append(f"{c.index}. {where} — \"{quote}\"")
 
     return "\n".join(lines)
 

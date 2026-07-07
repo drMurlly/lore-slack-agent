@@ -37,25 +37,42 @@ _STOP = {
 
 
 def _tokens(text: str) -> list[str]:
-    return [w for w in re.findall(r"[a-zA-Z0-9$%€£.]+", (text or "").lower()) if w]
+    # ASCII words/values as before, PLUS runs of non-ASCII (CJK / Cyrillic / Arabic / Hebrew / …)
+    # so non-Latin messages are indexable and searchable instead of silently tokenizing to nothing
+    # (a Cyrillic query used to score 0 against every doc → empty results, no error). This is
+    # additive on ASCII: pure-English text tokenizes exactly as before. casefold() folds case
+    # across scripts. Leading/trailing '.' are stripped per token so a sentence-final word or value
+    # ('price.', '$49.') matches the same clean term in a query — interior dots survive ('$10.50').
+    out: list[str] = []
+    for w in re.findall(r"[a-zA-Z0-9$%€£.]+|[^\x00-\x7f]+", (text or "").casefold()):
+        w = w.strip(".")
+        if w:
+            out.append(w)
+    return out
 
 
 def _content_tokens(text: str) -> set[str]:
     return {t for t in _tokens(text) if t not in _STOP and len(t) > 1}
 
 
-# Signatures of Lore's OWN Slack posts (answers, interim messages, canvas buttons). These get
+# DISTINCTIVE signatures of Lore's OWN Slack posts (answers, trace, canvas buttons). These get
 # posted into channels and would otherwise be re-indexed as "evidence" — a feedback loop that
-# pollutes retrieval with Lore's own prior answers. Skip them.
-_LORE_MARKERS = ("🔎", "🔦", "📄 *Final Answer*", "Research Trace", "View Full Canvas",
-                 "current value is", "It was later changed to", "An earlier value was")
+# pollutes retrieval with Lore's own prior answers. Each phrase here essentially never appears in
+# an ordinary human message. (Removed the over-broad "current value is" substring and the bare
+# [n]-bracket rule: humans legitimately write "tier [2] pricing" or "ticket [123]", and excluding
+# those silently dropped real evidence — including, potentially, the decisive reversal message.)
+_LORE_MARKERS = ("🔦 *Researching", "📄 *Final Answer*", "Research Trace", "View Full Canvas",
+                 "It was later changed to", "An earlier value was",
+                 "Lore resolves to the most recent decision")
 _CITE_RE = re.compile(r"\[\d+\]")
 
 
 def _is_lore_output(text: str) -> bool:
-    if _CITE_RE.search(text):        # inline [n] citation markers -> a synthesized answer
+    if any(m in text for m in _LORE_MARKERS):  # a distinctive Lore signature is decisive on its own
         return True
-    return any(m in text for m in _LORE_MARKERS)
+    # A bare [n] bracket is NOT proof of Lore output (humans write "tier [2]", "ticket [123]"); only
+    # treat it as ours when it co-occurs with the Decision-Graph badge / conflicting-signals framing.
+    return bool(_CITE_RE.search(text)) and ("🕸️" in text or "Conflicting signals" in text)
 
 
 class SlackHistoryRTS:

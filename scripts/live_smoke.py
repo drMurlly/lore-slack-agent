@@ -34,7 +34,7 @@ def main() -> int:
     from conduit.live_rts import SlackHistoryRTS
     from conduit.research import run, synthesize
     from conduit.canvas import build_report_markdown
-    from conduit.blocks import build_answer_blocks, final_block
+    from conduit.blocks import build_answer_blocks, final_block, build_money_shot_blocks
 
     client = WebClient(token=token)
     auth = client.auth_test()
@@ -96,7 +96,10 @@ def main() -> int:
         client.canvases_access_set(canvas_id=canvas_id, access_level="read", channel_ids=[target])
     except Exception as e:
         print(f"! canvases.access.set: {e}")
-    blocks = build_answer_blocks(answer.text[:1500])
+    # Post the SAME money-shot the live app now posts on every surface: Decision-Graph badge +
+    # decision timeline + conflicting-signals, then the cited answer + Canvas button.
+    blocks = build_money_shot_blocks(answer, graph=getattr(result, "graph", None), question=QUESTION)
+    blocks += build_answer_blocks(answer.text[:1500])
     if canvas_url:
         blocks += final_block(answer.text[:280], canvas_url)
     posted = client.chat_postMessage(channel=target, blocks=blocks, text=answer.text[:1500])

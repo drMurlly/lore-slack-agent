@@ -297,3 +297,42 @@ class TestResearchLoop:
         channels = {e.channel for e in result.evidence}
         assert "general" in channels
         assert "random" in channels
+
+
+class TestGlossaryMattersForRetrieval:
+    """The MCP glossary consult must EARN its place: resolved definitions are fed back into
+    retrieval, so removing MCP measurably degrades recall on acronym/jargon questions."""
+
+    def test_glossary_expansion_surfaces_evidence_the_acronym_alone_misses(self):
+        # Evidence spells the term OUT ("Annual Recurring Revenue"); the question uses only the
+        # acronym ("ARR"). Only the MCP-resolved expansion bridges the two.
+        corpus = {
+            "finance": [
+                CorpusMessage(
+                    text="Our Annual Recurring Revenue crossed $2M this quarter.",
+                    channel="finance", ts="100.000100", author="cfo",
+                )
+            ]
+        }
+        rts = FakeRTS(corpus=corpus)
+
+        class AcronymLLM(LLMClient):
+            def chat(self, messages, tools=None):
+                return {"content": "ARR", "tool_calls": None}
+
+        class GlossaryStub:
+            """Injected MCP manager (no subprocess) — resolves ARR to its long-form."""
+            def call_tool(self, name, args=None, **kwargs):
+                return [{"term": "ARR",
+                         "definition": "Annual Recurring Revenue — the yearly run-rate."}]
+
+        without_mcp = run("ARR?", rts, AcronymLLM(), glossary=False)
+        with_mcp = run("ARR?", rts, AcronymLLM(), glossary=GlossaryStub())
+
+        # Without the MCP consult, the acronym matches nothing in the spelled-out evidence.
+        assert len(without_mcp.evidence) == 0
+        # With it, the expansion "Annual Recurring Revenue" retrieves the message.
+        assert len(with_mcp.evidence) >= 1
+        assert any("Annual Recurring Revenue" in e.text for e in with_mcp.evidence)
+        # And the resolved definition is surfaced on the result too.
+        assert with_mcp.glossary and with_mcp.glossary[0]["term"] == "ARR"

@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 # Import from contradiction module for text analysis
 from conduit.contradiction import (
-    _NEGATION, _CLASS_PRIORITY, _keywords, _stem, _norm,
+    _NEGATION, _CLASS_PRIORITY, _keywords, _light_stem,
     extract_values, extract_typed_values, detect_drift, TimelineDrift,
 )
 
@@ -149,13 +149,13 @@ class KnowledgeGraph:
             predicate = "changed" if self._has_negation(text) else "decided"
 
             # Choose the topic this value attaches to (deterministic):
-            #   1. a question keyword whose STEM matches one in this message (so "price" and
-            #      "pricing" land on ONE topic node and the value chain doesn't split), else
+            #   1. a question keyword whose light stem matches one in this message (so "price"
+            #      and "pricing" land on ONE topic node and the value chain doesn't split), else
             #   2. the alphabetically-first content keyword, else
             #   3. a channel/unknown fallback.
             topic_id = None
-            q_words = {_norm(q) for q in (question_kws or set())}
-            anchor = sorted(kw for kw in kws if _norm(kw) in q_words)
+            q_words = {_light_stem(q) for q in (question_kws or set())}
+            anchor = sorted(kw for kw in kws if _light_stem(kw) in q_words)
             if anchor:
                 topic_id = f"topic:{anchor[0]}"
                 self._get_or_create_entity(topic_id, "topic", anchor[0], ts, permalink)
@@ -316,11 +316,11 @@ class KnowledgeGraph:
     def primary_topic(self, question: Optional[str] = None) -> Optional[str]:
         """The topic entity that best matches the question and has a value timeline.
 
-        Matches a question keyword by stem, preferring the topic with the longest timeline
-        (the most-decided entity). With no question, returns the topic with the most
+        Matches a question keyword by light stem, preferring the topic with the longest
+        timeline (the most-decided entity). With no question, returns the topic with the most
         decided/changed edges."""
         from conduit.contradiction import _keywords
-        kw_words = {_norm(k) for k in _keywords(question, None)} if question else set()
+        kw_words = {_light_stem(k) for k in _keywords(question, None)} if question else set()
         best: Optional[str] = None
         best_len = 0
         for eid, ent in self.entities.items():
@@ -329,7 +329,7 @@ class KnowledgeGraph:
             tl = self.timeline(eid)
             if not tl:
                 continue
-            if kw_words and _norm(ent.label) not in kw_words:
+            if kw_words and _light_stem(ent.label) not in kw_words:
                 continue
             if len(tl) > best_len:
                 best, best_len = eid, len(tl)
