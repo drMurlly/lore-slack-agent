@@ -9,6 +9,11 @@ venv/
 build/
 dist/
 
+# coverage artifacts
+.coverage
+coverage.xml
+htmlcov/
+
 # aider working artifacts
 .aider*
 .aider.tags.cache.v*/
