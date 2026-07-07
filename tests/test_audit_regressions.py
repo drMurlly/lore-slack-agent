@@ -131,15 +131,44 @@ def test_search_finds_sentence_final_keyword():
     assert hits and "price" in hits[0].text
 
 
-# --- #11 the feedback-loop filter no longer excludes ordinary human messages ---------------- #
+# --- #11 the feedback-loop filter keeps human evidence but catches Lore's own answers -------- #
 def test_is_lore_output_keeps_human_messages():
     from conduit.live_rts import _is_lore_output
+    # a single bracket is ordinary human usage -> NOT treated as Lore output
     assert _is_lore_output("We moved to tier [2] pricing, now $49") is False
     assert _is_lore_output("Ticket [123] tracks the pricing change to $49") is False
     assert _is_lore_output("the current value is unclear, maybe $49") is False
-    # but Lore's OWN distinctive posts are still filtered out
+    # Lore's own distinctive posts are filtered out
     assert _is_lore_output("📄 *Final Answer*\nPricing is $20 [1]") is True
     assert _is_lore_output("An earlier value was $10.") is True
+
+
+def test_is_lore_output_catches_multi_citation_answers():
+    """Live-found feedback loop: Lore's synthesized answers (2+ citations / adjacent [n][m]) must
+    be kept OUT of the index, or they pollute later queries with cross-topic values."""
+    from conduit.live_rts import _is_lore_output
+    assert _is_lore_output("We set $29 [1], then changed to $49 [2]. The current value is $49.") is True
+    assert _is_lore_output("We initially set the Pro tier to $29 per seat [4][5], but increased it.") is True
+    assert _is_lore_output("hiring 5 engineers [1], revised up from an initial plan of 3 [2][3].") is True
+
+
+def test_identifier_digits_are_not_extracted_as_values():
+    """Live-found: a region/version identifier digit ('eu-west-1') was extracted as num '1' and
+    turned a rate-limit drift into a bogus 100->1. Identifier digits must not be values."""
+    assert extract_typed_values("migrating from us-east-1 to eu-west-1") == []
+    assert extract_typed_values("pin the image to v2 and bucket s3") == []
+    # real quantities on either side are still extracted
+    assert extract_typed_values("raised the rate limit from 100 to 300 req/min") == [("num", "100"), ("num", "300")]
+    assert extract_typed_values("retention from 30 days to 90 days") == [("num", "30"), ("num", "90")]
+
+
+def test_rate_limit_reversal_resolves_correctly_not_polluted_by_region():
+    ev = [_ev("API rate limit set to 100 requests/min for launch", "1", channel="infra"),
+          _ev("raised the API rate limit from 100 to 300 requests/min", "2", channel="infra"),
+          _ev("migrating primary region from us-east-1 to eu-west-1", "3", channel="infra"),
+          _ev("eu-west-1 is the primary region going forward", "4", channel="infra")]
+    d = detect_drift(ev, question="what is our API rate limit")
+    assert d is not None and d.old_value == "100" and d.current_value == "300"
 
 
 # --- #9 Canvas markdown neutralizes angle-bracket autolinks --------------------------------- #

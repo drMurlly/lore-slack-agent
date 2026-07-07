@@ -55,24 +55,30 @@ def _content_tokens(text: str) -> set[str]:
     return {t for t in _tokens(text) if t not in _STOP and len(t) > 1}
 
 
-# DISTINCTIVE signatures of Lore's OWN Slack posts (answers, trace, canvas buttons). These get
-# posted into channels and would otherwise be re-indexed as "evidence" — a feedback loop that
-# pollutes retrieval with Lore's own prior answers. Each phrase here essentially never appears in
-# an ordinary human message. (Removed the over-broad "current value is" substring and the bare
-# [n]-bracket rule: humans legitimately write "tier [2] pricing" or "ticket [123]", and excluding
-# those silently dropped real evidence — including, potentially, the decisive reversal message.)
+# Signatures of Lore's OWN Slack posts (answers, trace, canvas buttons). Lore posts these into
+# channels; without filtering they get re-indexed as "evidence" — a feedback loop that pollutes
+# EVERY later query with Lore's own prior cross-topic answers (verified live: a pricing answer
+# leaked $29/$49 into a retention query, and a hiring answer produced a bogus 3→2 drift).
+# Distinctive phrases below essentially never appear in ordinary human messages.
 _LORE_MARKERS = ("🔦 *Researching", "📄 *Final Answer*", "Research Trace", "View Full Canvas",
                  "It was later changed to", "An earlier value was",
                  "Lore resolves to the most recent decision")
 _CITE_RE = re.compile(r"\[\d+\]")
+_ADJ_CITE_RE = re.compile(r"\[\d+\]\s*\[\d+\]")  # "[4][5]" — a synthesized answer citing evidence
 
 
 def _is_lore_output(text: str) -> bool:
-    if any(m in text for m in _LORE_MARKERS):  # a distinctive Lore signature is decisive on its own
+    """Whether a message is one of Lore's own synthesized posts (to keep it OUT of the index).
+
+    Balanced so it catches Lore answers without dropping legitimate human evidence: a single
+    bracket like "tier [2]" or "ticket [123]" is NOT treated as Lore output, but TWO+ citation
+    markers (or an adjacent ``[n][m]`` pair) is — Lore's answers always cite multiple sources,
+    humans almost never bracket two numbers in one message. Distinctive markers are decisive alone."""
+    if any(m in text for m in _LORE_MARKERS):
         return True
-    # A bare [n] bracket is NOT proof of Lore output (humans write "tier [2]", "ticket [123]"); only
-    # treat it as ours when it co-occurs with the Decision-Graph badge / conflicting-signals framing.
-    return bool(_CITE_RE.search(text)) and ("🕸️" in text or "Conflicting signals" in text)
+    if _ADJ_CITE_RE.search(text):
+        return True
+    return len(_CITE_RE.findall(text)) >= 2
 
 
 class SlackHistoryRTS:

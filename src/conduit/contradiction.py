@@ -33,7 +33,11 @@ from typing import Any, Optional, Sequence
 _VALUE_RE = re.compile(
     r"(?P<money>[$€£]\s?\d[\d,]*(?:\.\d+)?[KkMmBb]?)(?![A-Za-z])"
     r"|(?P<pct>\d+(?:\.\d+)?\s?%)"
-    r"|(?P<num>\b\d[\d,]*(?:\.\d+)?\b)"
+    # A bare number, but NOT a digit that is part of an identifier like a region/version
+    # ("us-east-1", "eu-west-1", "v2", "s3") — a hyphen/word before the digit means it's an
+    # identifier component, not a quantity, and must not join a value timeline (verified live:
+    # "eu-west-1" turned a rate-limit drift into a bogus 100→1).
+    r"|(?P<num>(?<![\w-])\d[\d,]*(?:\.\d+)?\b)"
 )
 
 # Words that flip a statement's polarity (a decision being reversed/cancelled).
