@@ -10,9 +10,9 @@ Built for the **Slack Agent Builder Challenge** — track: **Slack Agent for Goo
 
 ## ▶ Demo
 
-[![Watch the Lore demo on YouTube](https://img.youtube.com/vi/eQRmRfKLREc/maxresdefault.jpg)](https://www.youtube.com/watch?v=eQRmRfKLREc)
+[![Watch the Lore demo on YouTube](https://img.youtube.com/vi/F3_I2FzNH9I/maxresdefault.jpg)](https://www.youtube.com/watch?v=F3_I2FzNH9I)
 
-**▶ Watch the demo on YouTube: https://www.youtube.com/watch?v=eQRmRfKLREc**
+**▶ Watch the demo on YouTube: https://www.youtube.com/watch?v=F3_I2FzNH9I**
 
 A screen-recorded walkthrough (English voiceover + music) in the **real Slack client**: a teammate asks Lore about pricing, Lore streams its live research trace, returns a cited money-shot card showing the **$29 → $49** reversal resolved to the current answer, and every citation **deep-links to the exact source message** in Slack. Recorded live in the Simon.Ltd workspace. _(The raw file is also in this repo as [`lore-demo.mp4`](lore-demo.mp4).)_
 

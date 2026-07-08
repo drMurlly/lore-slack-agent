@@ -10,7 +10,7 @@ The code is done and live. What's left is human choreography. Work top-to-bottom
 - [ ] **Upload the architecture diagram to the Devpost FILE-UPLOAD field** — use
       `docs/architecture.png`. It is a *required* item and must go in the file field, **not** the
       image carousel.
-- [ ] **Confirm the video is public** — open <https://www.youtube.com/watch?v=eQRmRfKLREc> in an
+- [ ] **Confirm the video is public** — open <https://www.youtube.com/watch?v=F3_I2FzNH9I> in an
       **incognito window** (logged out). If it doesn't play, flip it to Public/Unlisted. Do this
       **≥24h before the deadline** (processing lag).
 - [ ] **Click Submit on Devpost** — track: **Slack Agent for Good** (primary). Paste the sandbox

@@ -80,7 +80,7 @@ with `qwen3.5` verified: clean cited answer, $10→$20 on the offline corpus.)*
 - [x] **Verified live** — full E2E ran in the "Simon.Ltd" workspace (real Canvas + posted answer)
 - [x] Public repo — <https://github.com/drMurlly/lore-slack-agent>
 - [ ] **Sandbox access** granted to `slackhack@salesforce.com` + `testing@devpost.com` (invite via Slack → *Invite people*)
-- [x] Demo video on YouTube — <https://www.youtube.com/watch?v=eQRmRfKLREc>
+- [x] Demo video on YouTube — <https://www.youtube.com/watch?v=F3_I2FzNH9I>
 
 ## Reproduce it
 ```bash
