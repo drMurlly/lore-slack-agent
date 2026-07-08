@@ -47,7 +47,7 @@ here — what's the story behind our pricing?"*, and the App Home leads with tha
 | **Technological Implementation** | Question **decomposition** → multi-hop **retrieval fan-out** with a follow-up hop on thin coverage → **ephemeral knowledge graph** (entities + typed `decided`/`changed`/`supersedes` edges) → **deterministic** contradiction / timeline-drift resolution → **citation-grounded synthesis** with deep-links → **Canvas** write-back. MCP consult in the loop. 191 tests, all offline-runnable. |
 | **Design (+ Best UX)** | Assistant split-view with a **streaming research trace** ("🔍 Decomposing… 🔎 Searching #pricing → 4 hits… ✅ cross-checking… 🕸️ knowledge graph…"), suggested prompts, a **Lore-branded App Home**, friendly empty/error states, and a beautiful **Canvas** whose Decision-timeline and every citation deep-link back to the exact source message. Block Kit throughout — never a wall of text. |
 
-## The demo money-shot (3-min video)
+## The demo money-shot
 Open the **Lore** assistant and click *"…what's the story behind our pricing?"* (or type
 *"What did we decide about pricing, and did anything change since?"*). Watch it **stream** its
 plan and live searches, then a **Canvas** appears:

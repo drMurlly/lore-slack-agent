@@ -18,11 +18,13 @@ A screen-recorded walkthrough (English voiceover + music) in the **real Slack cl
 
 ## Screenshots
 
-| The cited Canvas — the reversal, resolved | The Slack AI assistant + suggested prompts |
+_All real screen-captures of the live Slack client._
+
+| The cited answer — the $29 → $49 reversal, resolved | The Lore App Home — ask in one click |
 |---|---|
-| ![Canvas report with decision timeline $29 → $49 and cited answer](docs/gallery/gallery_01_canvas-money-shot.jpg) | ![Lore assistant with suggested prompts](docs/gallery/gallery_02_assistant-suggested-prompts.jpg) |
-| **Live streaming research trace** | **Decision timeline from the knowledge graph** |
-| ![Streaming research trace](docs/gallery/gallery_03_streaming-research-trace.jpg) | ![Decision timeline $29 → $49, current $49](docs/gallery/gallery_04_decision-timeline.jpg) |
+| ![Money-shot card: the $29 to $49 reversal resolved to the current value, with cited sources](docs/gallery/gallery_01_cited-answer.jpg) | ![The Lore App Home: pitch, example prompts, how-it-works, Agent for Good](docs/gallery/gallery_02_app-home.jpg) |
+| **Live research trace + real MCP glossary (assistant)** | **Every citation deep-links to the exact source** |
+| ![The assistant: streaming research trace, MCP glossary expansion, and a cited answer](docs/gallery/gallery_03_research-trace.jpg) | ![The leadership source messages the citations point to](docs/gallery/gallery_04_source-messages.jpg) |
 
 _More screens in [`docs/gallery/`](docs/gallery)._
 
