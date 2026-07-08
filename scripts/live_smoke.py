@@ -9,7 +9,7 @@ real research pipeline with the local model, builds + creates a **Canvas** via t
 Prereqs (after reinstalling the app with the full scopes + running scripts/seed_corpus.py):
 
     export SLACK_BOT_TOKEN=xoxb-…
-    export OLLAMA_API_BASE=http://192.168.10.52:11434/v1   # or your Ollama
+    export OLLAMA_API_BASE=http://localhost:11434/v1       # or your Ollama host
     export LORE_MODEL=qwen3.5:35b-a3b
     export LORE_CHANNELS="C…:pricing,C…:leadership,…"       # from seed_corpus.py
     .venv/bin/python scripts/live_smoke.py
